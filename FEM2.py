@@ -18,7 +18,6 @@ from exudyn.rigidBodyUtilities import AngularVelocity2EulerParameters_t, EulerPa
 import numpy as np #LoadSolutionFile
 from enum import Enum #for class HCBstaticModeSelection
 from lobpcg import *
-from lobpcgvspinvit import *
 
 #convert zero-based sparse matrix data to dense numpy matrix
 #DEPRECTAED!!!!!!!!!!!!!!!!
@@ -1710,12 +1709,6 @@ class FEMinterface:
         lam = E * nu / ((1+nu)*(1-2*nu))
 
         #setup (linear) mechanical FE-space
-        #test
-        #bfK += 2*mu*ngs.InnerProduct(ngs.Sym(ngs.Grad(u)), ngs.Sym(ngs.Grad(v)))*ngs.dx
-        #bfK += lam*ngs.InnerProduct(ngs.div(u), ngs.div(v))*ngs.dx
-        #bfM += rho*u*v * ngs.dx
-
-        #echt
         bfK += ngs.InnerProduct(sigma(ngs.Sym(ngs.Grad(u)),mu,lam), ngs.Sym(ngs.Grad(v)))*ngs.dx
         bfM += rho*u*v * ngs.dx
 
@@ -1726,48 +1719,21 @@ class FEMinterface:
 
         #setup bddc preconditioner
         ndscal = fes.ndof // mesh.dim
-        nv = mesh.nv
-        ne = mesh.ne
-        print("ndscal:", ndscal)
-        print("order:", meshOrder)
-        print("nv:", nv)
-        print("ne:", ne)
-        print("ndofs:",fes.ndof)
+        print(ndscal)
         print("++++++++++++++")
-        
+        nv = mesh.nv
 
         fes.SetCouplingType(ngs.IntRange(0, fes.ndof), ngs.COUPLING_TYPE.INTERFACE_DOF)
         fes.SetCouplingType(ngs.IntRange(0, nv), ngs.COUPLING_TYPE.WIREBASKET_DOF)
         fes.SetCouplingType(ngs.IntRange(ndscal, ndscal + nv), ngs.COUPLING_TYPE.WIREBASKET_DOF)
         fes.SetCouplingType(ngs.IntRange(2*ndscal, 2*ndscal + nv), ngs.COUPLING_TYPE.WIREBASKET_DOF)
 
-        F = ngs.specialcf.JacobianMatrix(3)
-        cond = ngs.Norm(F) * ngs.Norm(ngs.Inv(F))
-        ir = ngs.IntegrationRule([(1/4,1/4,1/4)], [1])
-
-        for el in mesh.Elements(ngs.VOL):
-            trafo = mesh.GetTrafo(el)
-            mir = trafo(ir)
-            condT = max(cond(mir))
-            if condT > 8:
-                for i in fes.GetDofNrs(el):
-                    fes.SetCouplingType(i, ngs.COUPLING_TYPE.WIREBASKET_DOF)
-                #print (condT)
-
         with ngs.TaskManager():
             bfKbddc = ngs.BilinearForm(fes, eliminate_internal=True)
             # setup (linear) mechanical FE-space for lowest order
             # bfKbddc += ngs.InnerProduct(2*mu*ngs.Sym(ngs.Grad(u)) + lam*ngs.Trace(ngs.Sym(ngs.Grad(u))) * ngs.Id(ngs.Sym(ngs.Grad(u)).dims[0]), ngs.Sym(ngs.Grad(v))) * ngs.dx
-            
-            #echt
             bfKbddc += ngs.InnerProduct(sigma(ngs.Sym(ngs.Grad(u)), mu, lam), ngs.Sym(ngs.Grad(v))) * ngs.dx
             bfKbddc += 1e6*rho*u*v * ngs.dx
-
-            #test
-            #bfKbddc += 2*mu*ngs.InnerProduct(ngs.Sym(ngs.Grad(u)), ngs.Sym(ngs.Grad(v)))*ngs.dx
-            #bfKbddc += lam*ngs.InnerProduct(ngs.div(u), ngs.div(v))*ngs.dx
-            #bfKbddc += 1e1*rho*u*v * ngs.dx
-
             prebddc = ngs.Preconditioner(bfKbddc, "bddc")
             bfKbddc.Assemble()
 
@@ -1777,7 +1743,6 @@ class FEMinterface:
         print("precond", max(lams) / min(lams))
         print(lams[0:3], "...\n", lams[-3:])
 
-        """
         # setup additional FE-space for preconditioner
         if meshOrder > 1:
             fesLo = ngs.VectorH1(mesh, order=1)
@@ -1789,15 +1754,8 @@ class FEMinterface:
             bfMLo = ngs.BilinearForm(fesLo)
 
             # setup (linear) mechanical FE-space for lowest order
-            
-            #echt
             bfKLo += ngs.InnerProduct(sigma(ngs.Sym(ngs.Grad(uLo)), mu, lam), ngs.Sym(ngs.Grad(vLo))) * ngs.dx
             bfMLo += rho * uLo * vLo * ngs.dx
-
-            #test
-            #bfKLo += 2*mu*ngs.InnerProduct(ngs.Sym(ngs.Grad(uLo)), ngs.Sym(ngs.Grad(vLo)))*ngs.dx
-            #bfKLo += lam*ngs.InnerProduct(ngs.div(uLo), ngs.div(vLo))*ngs.dx
-            #bfMLo += rho * uLo * vLo * ngs.dx
 
             bfKLo.Assemble()
             bfMLo.Assemble()
@@ -1836,7 +1794,6 @@ class FEMinterface:
         print("inv+hojac")
         print("precond", max(lams) / min(lams))
         print(lams[0:3], "...\n", lams[-3:])
-        """
 
         print("jacobi")
         prejac = bfKbddc.mat.CreateSmoother()
@@ -1951,17 +1908,15 @@ class FEMinterface:
             from ngsolve.eigenvalues import PINVIT
 
             with ngs.TaskManager():
-                #KM = bfK.mat.CreateMatrix()
-                #KM.AsVector().data = bfK.mat.AsVector() + 1e6* bfM.mat.AsVector()
+                KM = bfK.mat.CreateMatrix()
+                KM.AsVector().data = bfK.mat.AsVector() + 1e6* bfM.mat.AsVector()
             
-                #inv = KM.Inverse(inverse='sparsecholesky')
+                inv = KM.Inverse(inverse='sparsecholesky')
                 #res = lobpcg(bfK.mat, bfM.mat, inv, num=nModes + excludeRigidBodyModes, maxit=maxIt, \
                 #             printrates=verbose, GramSchmidt=True)
                 print("bddc")
                 res = lobpcg(bfK.mat, bfM.mat, prebddc, num=nModes + excludeRigidBodyModes, maxit=maxIt, \
                              printrates=verbose, GramSchmidt=True)
-                #res = lobpcgres(bfK.mat, bfM.mat, prebddc, num=nModes + excludeRigidBodyModes, maxit=100, \
-                #             printrates=verbose, GramSchmidt=True)
 
             #self.res = res
             nDOF = K.shape[0]
@@ -2009,9 +1964,7 @@ class FEMinterface:
             #res = lobpcg(bfK.mat, bfM.mat, inv, num=nModes + excludeRigidBodyModes, maxit=maxIt, \
             #             printrates=verbose, GramSchmidt=True)
             res = lobpcg(bfK.mat, bfM.mat, pre, num=nModes+excludeRigidBodyModes, maxit=maxIt, \
-                           printrates=verbose, GramSchmidt=True)
-            #res = lobpcgres(bfK.mat, bfM.mat, pre, num=nModes + excludeRigidBodyModes, maxit=100, \
-            #                 printrates=verbose, GramSchmidt=True)
+                            printrates=verbose, GramSchmidt=True)
 
         #nDOF = K.shape[0]
         nDOF = bfK.space.ndof
